@@ -12,7 +12,7 @@ export default function Home() {
       <main className="flex-1">
         <Hero />
 
-        <section className="mx-auto max-w-7xl px-4 py-24 sm:px-6 lg:px-8">
+        <section className="mx-auto max-w-[1800px] px-4 py-24 sm:px-6 lg:px-8">
           <div className="mb-16 text-center">
             <h2 className="mb-4 text-3xl font-bold text-white">
               Powerful Features
@@ -37,7 +37,7 @@ export default function Home() {
         </section>
 
         <section className="border-t border-white/10 bg-white/5 py-24">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-[1800px] px-4 sm:px-6 lg:px-8">
             <div className="mb-16 text-center">
               <h2 className="mb-4 text-3xl font-bold text-white">
                 How It Works

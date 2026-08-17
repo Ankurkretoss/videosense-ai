@@ -11,7 +11,7 @@ export function Navbar() {
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-black/50 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-16 max-w-[1800px] items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link href="/" className="flex items-center gap-2">
           <Video className="h-6 w-6 text-indigo-500" />
           <span className="text-lg font-semibold text-white">
@@ -25,6 +25,12 @@ export function Navbar() {
             className="text-sm text-gray-400 transition-colors hover:text-white"
           >
             Home
+          </Link>
+          <Link
+            href="/sports-analysis"
+            className="text-sm text-gray-400 transition-colors hover:text-white"
+          >
+            Sports Analysis
           </Link>
           <Link href="/analyze">
             <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700">
@@ -56,6 +62,13 @@ export function Navbar() {
                 onClick={() => setIsOpen(false)}
               >
                 Home
+              </Link>
+              <Link
+                href="/sports-analysis"
+                className="block text-gray-400 transition-colors hover:text-white"
+                onClick={() => setIsOpen(false)}
+              >
+                Sports Analysis
               </Link>
               <Link href="/analyze" onClick={() => setIsOpen(false)}>
                 <Button className="w-full bg-indigo-600 hover:bg-indigo-700">

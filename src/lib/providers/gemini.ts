@@ -1,7 +1,27 @@
-import type { VideoAnalysis } from "@/types/analysis";
-import type { AIProvider } from "@/lib/ai";
+import type { VideoAnalysis, VideoMetadata } from "@/types/analysis";
+import type { SportsAnalysis } from "@/types/sports-analysis";
+import type { AIProvider, SportsAnalysisOptions } from "@/lib/ai";
+import { buildEventPrompt, buildReportPrompt, buildScanPrompt } from "./sports-prompt";
+import { parseLooseJson } from "./json-parse";
+import { uploadVideoToGemini } from "./gemini-files";
+import { buildSportsAnalysis } from "@/lib/sports-normalize";
+import { probeVideoFile, youtubeThumbnail } from "@/lib/video-meta";
+import { secondsToTimestamp } from "@/lib/time";
 
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta";
+const MAX_OUTPUT_TOKENS = 65536;
+
+interface VideoSourcePart {
+  uri: string;
+  mimeType?: string;
+  durationSeconds: number;
+  sourceHint: string;
+}
+
+interface PassResult {
+  data: Record<string, unknown>;
+  truncated: boolean;
+}
 
 export class GeminiProvider implements AIProvider {
   private apiKey: string;
@@ -9,7 +29,7 @@ export class GeminiProvider implements AIProvider {
 
   constructor(apiKey: string, model?: string) {
     this.apiKey = apiKey;
-    this.model = model || "gemini-2.0-flash";
+    this.model = model || "gemini-3.5-flash";
   }
 
   private async generateContent(prompt: string): Promise<string> {
@@ -187,5 +207,299 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
 
     const result = await this.generateContent(prompt);
     return this.parseAnalysis(result);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Deep football analysis
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Sampling fidelity has to scale with clip length: an 8 s clip costs ~550 video
+   * tokens per second at 2 fps / high media resolution, so a full match at that
+   * setting would not fit in the 1M context window.
+   */
+  private samplingFor(durationSeconds: number): { fps: number; mediaResolution: string } {
+    if (durationSeconds > 0 && durationSeconds <= 300) {
+      return { fps: 2, mediaResolution: "MEDIA_RESOLUTION_HIGH" };
+    }
+    if (durationSeconds === 0 || durationSeconds <= 1200) {
+      return { fps: 1, mediaResolution: "MEDIA_RESOLUTION_HIGH" };
+    }
+    return { fps: 1, mediaResolution: "MEDIA_RESOLUTION_LOW" };
+  }
+
+  private async runPass(
+    source: VideoSourcePart,
+    prompt: string,
+    signal?: AbortSignal
+  ): Promise<PassResult> {
+    let sampling = this.samplingFor(source.durationSeconds);
+
+    const requestBody = () =>
+      JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                fileData: {
+                  fileUri: source.uri,
+                  ...(source.mimeType ? { mimeType: source.mimeType } : {}),
+                },
+                videoMetadata: { fps: sampling.fps },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.15,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          responseMimeType: "application/json",
+          mediaResolution: sampling.mediaResolution,
+        },
+      });
+
+    let lastError = "";
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
+
+      const response = await fetch(
+        `${GEMINI_API_URL}/models/${this.model}:generateContent?key=${this.apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody(),
+          signal,
+        }
+      );
+
+      if (!response.ok) {
+        lastError = await response.text();
+        if (response.status === 429 || response.status >= 500) continue;
+
+        // Too many video tokens for the context window — resample coarsely and retry once.
+        if (
+          response.status === 400 &&
+          /token/i.test(lastError) &&
+          sampling.mediaResolution !== "MEDIA_RESOLUTION_LOW"
+        ) {
+          sampling = { fps: 1, mediaResolution: "MEDIA_RESOLUTION_LOW" };
+          continue;
+        }
+
+        throw new Error(`Gemini analysis failed (${response.status}): ${lastError}`);
+      }
+
+      const data = await response.json();
+      const candidate = data.candidates?.[0];
+      const text: string = (candidate?.content?.parts ?? [])
+        .filter((part: { thought?: boolean; text?: string }) => !part.thought && part.text)
+        .map((part: { text: string }) => part.text)
+        .join("");
+
+      if (!text) {
+        const blockReason = data.promptFeedback?.blockReason || candidate?.finishReason;
+        lastError = blockReason
+          ? `Gemini returned no analysis (${blockReason}).`
+          : "Gemini returned an empty response.";
+        continue;
+      }
+
+      const { data: parsed, repaired } = parseLooseJson<Record<string, unknown>>(text);
+      return { data: parsed, truncated: repaired || candidate?.finishReason === "MAX_TOKENS" };
+    }
+
+    throw new Error(lastError || "Gemini analysis failed after several attempts.");
+  }
+
+  /** Compact context handed to the final pass so the report agrees with passes 1 and 2. */
+  private summarizeForReport(payload: Record<string, unknown>, keys: string[], limit: number): string {
+    const subset: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (payload[key] !== undefined) subset[key] = payload[key];
+    }
+    const json = JSON.stringify(subset);
+    return json.length > limit ? `${json.slice(0, limit)}… (truncated)` : json;
+  }
+
+  private rosterLines(scan: Record<string, unknown>): string {
+    const players = Array.isArray(scan.players) ? scan.players : [];
+    if (players.length === 0) return "(no players were identified in pass 1)";
+
+    return players
+      .slice(0, 40)
+      .map((player: Record<string, unknown>) => {
+        const number = player.jerseyNumber || "unknown";
+        const role = player.isGoalkeeper || player.role === "goalkeeper" ? "GK" : player.position || "outfield";
+        return `- #${number} (${player.team || "unknown team"}, ${role})`;
+      })
+      .join("\n");
+  }
+
+  private async runDeepAnalysis(
+    source: VideoSourcePart,
+    metadata: VideoMetadata,
+    options: SportsAnalysisOptions
+  ): Promise<SportsAnalysis> {
+    const { onProgress, signal } = options;
+    const context = {
+      sourceHint: source.sourceHint,
+      durationLabel: metadata.duration,
+    };
+    const caveats: string[] = [];
+
+    onProgress?.({
+      stage: "analyzing-frames",
+      progress: 34,
+      message: "Detecting players, jersey numbers and tracking movement...",
+    });
+
+    const scanPass = await this.runPass(source, buildScanPrompt(context), signal);
+    if (scanPass.truncated) {
+      caveats.push("The player-tracking pass hit the output limit — some player detail may be missing.");
+    }
+
+    onProgress?.({
+      stage: "analyzing-frames",
+      progress: 58,
+      message: "Logging touches, passes, kicks, shots, goals and referee calls...",
+    });
+
+    let eventPass: PassResult = { data: {}, truncated: false };
+    try {
+      eventPass = await this.runPass(
+        source,
+        buildEventPrompt(context, this.rosterLines(scanPass.data)),
+        signal
+      );
+      if (eventPass.truncated) {
+        caveats.push("The event pass hit the output limit — the longest event lists were cut short.");
+      }
+    } catch (error) {
+      caveats.push(
+        `Event-level analysis failed: ${error instanceof Error ? error.message : "unknown error"}`
+      );
+    }
+
+    onProgress?.({
+      stage: "generating-summary",
+      progress: 80,
+      message: "Building tactics, ratings and the final match report...",
+    });
+
+    let reportPass: PassResult = { data: {}, truncated: false };
+    try {
+      reportPass = await this.runPass(
+        source,
+        buildReportPrompt(
+          context,
+          this.summarizeForReport(scanPass.data, ["playerCount", "players", "goalkeepers"], 14000),
+          this.summarizeForReport(
+            eventPass.data,
+            ["goals", "shots", "refereeDecisions", "defensiveActions", "timeline"],
+            14000
+          )
+        ),
+        signal
+      );
+    } catch (error) {
+      caveats.push(
+        `Tactical report pass failed: ${error instanceof Error ? error.message : "unknown error"}`
+      );
+    }
+
+    onProgress?.({
+      stage: "preparing-report",
+      progress: 94,
+      message: "Assembling the match report...",
+    });
+
+    return buildSportsAnalysis({
+      scan: scanPass.data,
+      events: eventPass.data,
+      report: reportPass.data,
+      metadata,
+      durationSeconds: source.durationSeconds,
+      caveats,
+    });
+  }
+
+  async analyzeSportsVideo(
+    file: File,
+    options: SportsAnalysisOptions = {}
+  ): Promise<SportsAnalysis> {
+    const { onProgress, signal } = options;
+
+    onProgress?.({ stage: "uploading", progress: 2, message: "Reading video file..." });
+    const probe = await probeVideoFile(file);
+
+    const metadata: VideoMetadata = {
+      title: file.name,
+      source: "Local File",
+      duration: probe.durationSeconds > 0 ? secondsToTimestamp(probe.durationSeconds) : "unknown",
+      resolution: probe.width > 0 ? `${probe.width}x${probe.height}` : "unknown",
+      fileSize: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+      thumbnail: probe.thumbnail,
+    };
+
+    const uploaded = await uploadVideoToGemini(file, this.apiKey, {
+      signal,
+      onProgress: (ratio) =>
+        onProgress?.({
+          stage: "uploading",
+          progress: 2 + ratio * 23,
+          message: `Uploading match footage... ${Math.round(ratio * 100)}%`,
+        }),
+      onStateChange: (state) =>
+        onProgress?.({
+          stage: "processing-video",
+          progress: 28,
+          message:
+            state === "PROCESSING"
+              ? "Gemini is decoding the footage..."
+              : "Footage ready for analysis.",
+        }),
+    });
+
+    return this.runDeepAnalysis(
+      {
+        uri: uploaded.uri,
+        mimeType: uploaded.mimeType,
+        durationSeconds: probe.durationSeconds,
+        sourceHint: file.name,
+      },
+      metadata,
+      options
+    );
+  }
+
+  async analyzeSportsYouTubeVideo(
+    url: string,
+    options: SportsAnalysisOptions = {}
+  ): Promise<SportsAnalysis> {
+    options.onProgress?.({
+      stage: "processing-video",
+      progress: 20,
+      message: "Fetching the YouTube video...",
+    });
+
+    const metadata: VideoMetadata = {
+      title: "YouTube match footage",
+      source: url,
+      duration: "unknown",
+      resolution: "N/A",
+      fileSize: "N/A",
+      thumbnail: youtubeThumbnail(url),
+    };
+
+    return this.runDeepAnalysis(
+      { uri: url, durationSeconds: 0, sourceHint: url },
+      metadata,
+      options
+    );
   }
 }

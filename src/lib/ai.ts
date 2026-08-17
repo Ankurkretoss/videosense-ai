@@ -1,8 +1,20 @@
-import type { VideoAnalysis } from "@/types/analysis";
+import type { AnalysisStatus, VideoAnalysis } from "@/types/analysis";
+import type { SportsAnalysis } from "@/types/sports-analysis";
 
 export interface AIProvider {
   analyzeVideo(file: File): Promise<VideoAnalysis>;
   analyzeYouTubeVideo(url: string): Promise<VideoAnalysis>;
+}
+
+export interface SportsProgressEvent {
+  stage: AnalysisStatus;
+  progress: number;
+  message: string;
+}
+
+export interface SportsAnalysisOptions {
+  onProgress?: (event: SportsProgressEvent) => void;
+  signal?: AbortSignal;
 }
 
 class MockAIProvider implements AIProvider {
@@ -174,4 +186,22 @@ export async function initializeMimoProvider(apiKey: string): Promise<void> {
   const { MimoProvider } = await import("./providers/mimo");
   const provider = new MimoProvider(apiKey);
   setAIProvider(provider);
+}
+
+export async function analyzeSportsVideo(
+  file: File,
+  apiKey: string,
+  options: SportsAnalysisOptions = {}
+): Promise<SportsAnalysis> {
+  const { GeminiProvider } = await import("./providers/gemini");
+  return new GeminiProvider(apiKey).analyzeSportsVideo(file, options);
+}
+
+export async function analyzeSportsYouTubeVideo(
+  url: string,
+  apiKey: string,
+  options: SportsAnalysisOptions = {}
+): Promise<SportsAnalysis> {
+  const { GeminiProvider } = await import("./providers/gemini");
+  return new GeminiProvider(apiKey).analyzeSportsYouTubeVideo(url, options);
 }
