@@ -15,10 +15,10 @@ export function VideoOverview({ metadata }: VideoOverviewProps) {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
     >
-      <Card className="border-white/10 bg-white/5">
+      <Card className="border-white/[0.11] bg-panel">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-white">
-            <FileVideo className="h-5 w-5 text-indigo-400" />
+            <FileVideo className="h-5 w-5 text-brand-soft" />
             Video Overview
           </CardTitle>
         </CardHeader>
@@ -42,19 +42,19 @@ export function VideoOverview({ metadata }: VideoOverviewProps) {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center gap-2 text-gray-400">
+                <div className="flex items-center gap-2 text-mute">
                   <Clock className="h-4 w-4" />
                   <span className="text-sm">{metadata.duration}</span>
                 </div>
-                <div className="flex items-center gap-2 text-gray-400">
+                <div className="flex items-center gap-2 text-mute">
                   <Monitor className="h-4 w-4" />
                   <span className="text-sm">{metadata.resolution}</span>
                 </div>
-                <div className="flex items-center gap-2 text-gray-400">
+                <div className="flex items-center gap-2 text-mute">
                   <HardDrive className="h-4 w-4" />
                   <span className="text-sm">{metadata.fileSize}</span>
                 </div>
-                <div className="flex items-center gap-2 text-gray-400">
+                <div className="flex items-center gap-2 text-mute">
                   <Globe className="h-4 w-4" />
                   <span className="text-sm truncate">{metadata.source}</span>
                 </div>

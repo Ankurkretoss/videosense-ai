@@ -1,11 +1,17 @@
 import { useCallback, useRef, useState } from "react";
 import type { AnalysisStatus, UploadProgress } from "@/types/analysis";
 import type { SportsAnalysis } from "@/types/sports-analysis";
-import { analyzeSportsVideo, analyzeSportsYouTubeVideo } from "@/lib/ai";
+import {
+  analyzeSportsVideo,
+  analyzeSportsYouTubeVideo,
+  type SportsProgressDetail,
+  type SportsProgressEvent,
+} from "@/lib/ai";
 
 interface SportsAnalysisState {
   status: AnalysisStatus;
   progress: UploadProgress;
+  detail: SportsProgressDetail;
   result: SportsAnalysis | null;
   error: string | null;
 }
@@ -13,6 +19,7 @@ interface SportsAnalysisState {
 const IDLE_STATE: SportsAnalysisState = {
   status: "idle",
   progress: { status: "idle", progress: 0, message: "" },
+  detail: {},
   result: null,
   error: null,
 };
@@ -34,17 +41,19 @@ export function useSportsAnalysis(apiKey: string | null) {
       setState({
         status: "uploading",
         progress: { status: "uploading", progress: 1, message: "Preparing match footage..." },
+        detail: {},
         result: null,
         error: null,
       });
 
       const options = {
         signal: controller.signal,
-        onProgress: ({ stage, progress, message }: { stage: AnalysisStatus; progress: number; message: string }) =>
+        onProgress: ({ stage, progress, message, detail }: SportsProgressEvent) =>
           setState((prev) => ({
             ...prev,
             status: stage,
             progress: { status: stage, progress: Math.round(progress), message },
+            detail: detail ? { ...prev.detail, ...detail } : prev.detail,
           })),
       };
 
@@ -57,12 +66,13 @@ export function useSportsAnalysis(apiKey: string | null) {
 
         if (!result) throw new Error("No video source provided");
 
-        setState({
+        setState((prev) => ({
           status: "completed",
           progress: { status: "completed", progress: 100, message: "Match report ready." },
+          detail: prev.detail,
           result,
           error: null,
-        });
+        }));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Analysis failed";
         setState((prev) => ({

@@ -74,6 +74,15 @@ export function youtubeVideoId(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Gemini rejects YouTube links that carry extra query parameters (a `&t=` start
+ * time returns 400 INVALID_ARGUMENT), so links are reduced to the canonical form.
+ */
+export function canonicalYoutubeUrl(url: string): string {
+  const id = youtubeVideoId(url);
+  return id ? `https://www.youtube.com/watch?v=${id}` : url.split("&")[0];
+}
+
 export function youtubeThumbnail(url: string): string {
   const id = youtubeVideoId(url);
   return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";

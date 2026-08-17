@@ -6,10 +6,19 @@ export interface AIProvider {
   analyzeYouTubeVideo(url: string): Promise<VideoAnalysis>;
 }
 
+export interface SportsProgressDetail {
+  players?: number;
+  events?: number;
+  clips?: number;
+  coverage?: string;
+}
+
 export interface SportsProgressEvent {
   stage: AnalysisStatus;
   progress: number;
   message: string;
+  /** Counts learned so far, so the progress screen can show real numbers. */
+  detail?: SportsProgressDetail;
 }
 
 export interface SportsAnalysisOptions {
@@ -179,12 +188,6 @@ export async function analyzeYouTubeVideo(url: string): Promise<VideoAnalysis> {
 export async function initializeGeminiProvider(apiKey: string): Promise<void> {
   const { GeminiProvider } = await import("./providers/gemini");
   const provider = new GeminiProvider(apiKey);
-  setAIProvider(provider);
-}
-
-export async function initializeMimoProvider(apiKey: string): Promise<void> {
-  const { MimoProvider } = await import("./providers/mimo");
-  const provider = new MimoProvider(apiKey);
   setAIProvider(provider);
 }
 

@@ -5,7 +5,7 @@ import { buildEventPrompt, buildReportPrompt, buildScanPrompt } from "./sports-p
 import { parseLooseJson } from "./json-parse";
 import { uploadVideoToGemini } from "./gemini-files";
 import { buildSportsAnalysis } from "@/lib/sports-normalize";
-import { probeVideoFile, youtubeThumbnail } from "@/lib/video-meta";
+import { canonicalYoutubeUrl, probeVideoFile, youtubeThumbnail } from "@/lib/video-meta";
 import { secondsToTimestamp } from "@/lib/time";
 
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -21,6 +21,42 @@ interface VideoSourcePart {
 interface PassResult {
   data: Record<string, unknown>;
   truncated: boolean;
+}
+
+/** Retry pacing for a busy model: 3s, 8s, 15s, 25s, 40s. */
+const RETRY_DELAYS_MS = [3000, 8000, 15000, 25000, 40000];
+
+/** A single pass should never hang the whole analysis. */
+const PASS_TIMEOUT_MS = 8 * 60 * 1000;
+
+/** Combines the caller's cancellation with a per-request timeout. */
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!signal) return timeout;
+  return typeof AbortSignal.any === "function" ? AbortSignal.any([signal, timeout]) : signal;
+}
+
+/**
+ * The provider's own errors are raw JSON and mean nothing to a coach, so every
+ * failure is translated into something actionable before it reaches the UI.
+ */
+function describeApiFailure(status: number, body: string): string {
+  if (status === 503 || /UNAVAILABLE|high demand|overloaded/i.test(body)) {
+    return "The AI service is busy right now and could not take this analysis. It is a temporary capacity problem on their side — try again in a few minutes.";
+  }
+  if (status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(body)) {
+    return "The AI request limit for this API key has been reached. Wait a few minutes, or use a key with more quota.";
+  }
+  if (status === 403 || /PERMISSION_DENIED|API key not valid/i.test(body)) {
+    return "The Gemini API key was rejected. Check GEMINI_API_KEY in your environment.";
+  }
+  if (status === 404) {
+    return "The analysis model is not available for this API key.";
+  }
+  if (status >= 500) {
+    return "The AI service failed while analysing this video. It is a problem on their side — please try again.";
+  }
+  return `The AI service refused this request (${status}).`;
 }
 
 export class GeminiProvider implements AIProvider {
@@ -231,7 +267,8 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
   private async runPass(
     source: VideoSourcePart,
     prompt: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onRetry?: (note: string) => void
   ): Promise<PassResult> {
     let sampling = this.samplingFor(source.durationSeconds);
 
@@ -261,24 +298,47 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
       });
 
     let lastError = "";
+    let lastStatus = 0;
+    const attempts = RETRY_DELAYS_MS.length + 1;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+        const waitMs = RETRY_DELAYS_MS[attempt - 1];
+        onRetry?.(
+          `The AI service is busy — retrying in ${Math.round(waitMs / 1000)}s (attempt ${
+            attempt + 1
+          } of ${attempts})...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
 
-      const response = await fetch(
-        `${GEMINI_API_URL}/models/${this.model}:generateContent?key=${this.apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: requestBody(),
-          signal,
-        }
-      );
+      let response: Response;
+      try {
+        response = await fetch(
+          `${GEMINI_API_URL}/models/${this.model}:generateContent?key=${this.apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody(),
+            signal: requestSignal(signal, PASS_TIMEOUT_MS),
+          }
+        );
+      } catch (cause) {
+        // The caller cancelled — stop immediately rather than retrying.
+        if (signal?.aborted) throw new Error("Analysis cancelled.");
+
+        lastStatus = 0;
+        lastError =
+          cause instanceof Error && cause.name === "TimeoutError"
+            ? "This analysis pass took too long and was stopped. Try a shorter clip."
+            : "The connection to the AI service dropped.";
+        onRetry?.("Connection problem — retrying...");
+        continue;
+      }
 
       if (!response.ok) {
         lastError = await response.text();
+        lastStatus = response.status;
         if (response.status === 429 || response.status >= 500) continue;
 
         // Too many video tokens for the context window — resample coarsely and retry once.
@@ -291,7 +351,14 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
           continue;
         }
 
-        throw new Error(`Gemini analysis failed (${response.status}): ${lastError}`);
+        if (response.status === 400 && /invalid argument/i.test(lastError)) {
+          throw new Error(
+            "The AI service rejected this video source. For YouTube the video must be public and not " +
+              "age-restricted; for uploads try a standard MP4."
+          );
+        }
+
+        throw new Error(describeApiFailure(response.status, lastError));
       }
 
       const data = await response.json();
@@ -303,9 +370,11 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
 
       if (!text) {
         const blockReason = data.promptFeedback?.blockReason || candidate?.finishReason;
+        lastStatus = 0;
         lastError = blockReason
-          ? `Gemini returned no analysis (${blockReason}).`
-          : "Gemini returned an empty response.";
+          ? `The AI returned no analysis for this pass (${blockReason}).`
+          : "The AI returned an empty response for this pass.";
+        onRetry?.("The AI returned nothing for this pass — retrying...");
         continue;
       }
 
@@ -313,7 +382,11 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
       return { data: parsed, truncated: repaired || candidate?.finishReason === "MAX_TOKENS" };
     }
 
-    throw new Error(lastError || "Gemini analysis failed after several attempts.");
+    throw new Error(
+      lastStatus > 0
+        ? describeApiFailure(lastStatus, lastError)
+        : lastError || "The AI service did not complete this analysis after several attempts."
+    );
   }
 
   /** Compact context handed to the final pass so the report agrees with passes 1 and 2. */
@@ -352,29 +425,69 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
     };
     const caveats: string[] = [];
 
+    /** Keeps the bar moving while a long pass runs, and surfaces retry notes. */
+    const passReporter = (
+      stage: "analyzing-frames" | "generating-summary",
+      from: number,
+      to: number,
+      label: string
+    ) => {
+      let current = from;
+      const timer = setInterval(() => {
+        current = Math.min(to - 1, current + 0.4);
+        onProgress?.({ stage, progress: current, message: label });
+      }, 4000);
+
+      return {
+        note: (text: string) => onProgress?.({ stage, progress: current, message: text }),
+        done: () => clearInterval(timer),
+      };
+    };
+
     onProgress?.({
       stage: "analyzing-frames",
       progress: 34,
       message: "Detecting players, jersey numbers and tracking movement...",
     });
 
-    const scanPass = await this.runPass(source, buildScanPrompt(context), signal);
+    const scanReporter = passReporter(
+      "analyzing-frames",
+      34,
+      58,
+      "Detecting players, jersey numbers and tracking movement..."
+    );
+    let scanPass: PassResult;
+    try {
+      scanPass = await this.runPass(source, buildScanPrompt(context), signal, scanReporter.note);
+    } finally {
+      scanReporter.done();
+    }
     if (scanPass.truncated) {
       caveats.push("The player-tracking pass hit the output limit — some player detail may be missing.");
     }
+
+    const scannedPlayers = Array.isArray(scanPass.data.players) ? scanPass.data.players.length : 0;
 
     onProgress?.({
       stage: "analyzing-frames",
       progress: 58,
       message: "Logging touches, passes, kicks, shots, goals and referee calls...",
+      detail: { players: scannedPlayers },
     });
 
     let eventPass: PassResult = { data: {}, truncated: false };
+    const eventReporter = passReporter(
+      "analyzing-frames",
+      58,
+      80,
+      "Logging touches, passes, kicks, shots, goals and referee calls..."
+    );
     try {
       eventPass = await this.runPass(
         source,
         buildEventPrompt(context, this.rosterLines(scanPass.data)),
-        signal
+        signal,
+        eventReporter.note
       );
       if (eventPass.truncated) {
         caveats.push("The event pass hit the output limit — the longest event lists were cut short.");
@@ -383,15 +496,38 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
       caveats.push(
         `Event-level analysis failed: ${error instanceof Error ? error.message : "unknown error"}`
       );
+    } finally {
+      eventReporter.done();
     }
+
+    const countOf = (key: string) =>
+      Array.isArray(eventPass.data[key]) ? (eventPass.data[key] as unknown[]).length : 0;
+    const loggedEvents =
+      countOf("touches") +
+      countOf("passes") +
+      countOf("kicks") +
+      countOf("shots") +
+      countOf("defensiveActions") +
+      countOf("refereeDecisions");
 
     onProgress?.({
       stage: "generating-summary",
       progress: 80,
       message: "Building tactics, ratings and the final match report...",
+      detail: {
+        players: scannedPlayers,
+        events: loggedEvents,
+        clips: countOf("highlights"),
+      },
     });
 
     let reportPass: PassResult = { data: {}, truncated: false };
+    const reportReporter = passReporter(
+      "generating-summary",
+      80,
+      94,
+      "Building tactics, ratings and the final match report..."
+    );
     try {
       reportPass = await this.runPass(
         source,
@@ -404,12 +540,15 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
             14000
           )
         ),
-        signal
+        signal,
+        reportReporter.note
       );
     } catch (error) {
       caveats.push(
         `Tactical report pass failed: ${error instanceof Error ? error.message : "unknown error"}`
       );
+    } finally {
+      reportReporter.done();
     }
 
     onProgress?.({
@@ -496,8 +635,9 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
       thumbnail: youtubeThumbnail(url),
     };
 
+    // The request needs the canonical link; the report keeps the URL the user pasted.
     return this.runDeepAnalysis(
-      { uri: url, durationSeconds: 0, sourceHint: url },
+      { uri: canonicalYoutubeUrl(url), durationSeconds: 0, sourceHint: url },
       metadata,
       options
     );
