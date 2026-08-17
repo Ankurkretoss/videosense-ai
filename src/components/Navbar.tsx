@@ -32,6 +32,12 @@ export function Navbar() {
           >
             Sports Analysis
           </Link>
+          <Link
+            href="/library"
+            className="text-sm text-gray-400 transition-colors hover:text-white"
+          >
+            Library
+          </Link>
           <Link href="/analyze">
             <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700">
               Analyze Video
@@ -69,6 +75,13 @@ export function Navbar() {
                 onClick={() => setIsOpen(false)}
               >
                 Sports Analysis
+              </Link>
+              <Link
+                href="/library"
+                className="block text-gray-400 transition-colors hover:text-white"
+                onClick={() => setIsOpen(false)}
+              >
+                Library
               </Link>
               <Link href="/analyze" onClick={() => setIsOpen(false)}>
                 <Button className="w-full bg-indigo-600 hover:bg-indigo-700">

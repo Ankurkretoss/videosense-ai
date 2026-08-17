@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Clapperboard,
@@ -15,15 +15,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionCard, FilterChips, jerseyDisplay } from "./report-ui";
-import {
-  buildHighlightReel,
-  downloadBlob,
-  extractClip,
-  extractClips,
-  slugifyFilename,
-  type ClipWindow,
-} from "@/lib/clip";
-import { createZip } from "@/lib/zip";
+import { downloadBlob, slugifyFilename } from "@/lib/clip";
+import { clipWindowFor, type HighlightClipsState } from "@/hooks/useHighlightClips";
 import { timeToSeconds } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Highlight, HighlightType } from "@/types/sports-analysis";
@@ -32,6 +25,8 @@ interface HighlightClipsProps {
   highlights: Highlight[];
   sourceFile: File | null;
   youtubeUrl: string | null;
+  /** Clip queue owned by the page, so cutting runs regardless of the active tab. */
+  clipState: HighlightClipsState;
   onSeek?: (seconds: number) => void;
 }
 
@@ -77,33 +72,28 @@ const TYPE_STYLES: Partial<Record<HighlightType, string>> = {
   mistake: "border-amber-500/50 bg-amber-500/10 text-amber-300",
 };
 
-function clipWindow(highlight: Highlight): ClipWindow {
-  return {
-    id: highlight.id,
-    label: `${highlight.startTimestamp.replace(/:/g, "-")}-${slugifyFilename(
-      `${TYPE_LABELS[highlight.type]}-${highlight.title}`
-    )}`,
-    startSeconds: timeToSeconds(highlight.startTimestamp),
-    endSeconds: timeToSeconds(highlight.endTimestamp),
-  };
-}
-
 export function HighlightClips({
   highlights,
   sourceFile,
   youtubeUrl,
+  clipState,
   onSeek,
 }: HighlightClipsProps) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [playerFilter, setPlayerFilter] = useState("all");
-  const [clips, setClips] = useState<Record<string, { blob: Blob; url: string }>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const busyRef = useRef<string | null>(null);
-  const autoStartedFor = useRef<File | null>(null);
+  const {
+    clips,
+    busy,
+    progress,
+    statusText,
+    error,
+    readyCount,
+    autoRunning,
+    generateOne,
+    downloadZip,
+    buildReel,
+    cancel,
+  } = clipState;
 
   const players = useMemo(() => {
     const seen = new Set<string>();
@@ -125,58 +115,7 @@ export function HighlightClips({
     [highlights, typeFilter, playerFilter]
   );
 
-  const storeClip = useCallback((id: string, blob: Blob) => {
-    setClips((current) => {
-      if (current[id]) URL.revokeObjectURL(current[id].url);
-      return { ...current, [id]: { blob, url: URL.createObjectURL(blob) } };
-    });
-  }, []);
-
-  const runJob = useCallback(
-    async (job: string, task: (signal: AbortSignal) => Promise<void>) => {
-      if (busyRef.current) return;
-      const controller = new AbortController();
-      abortRef.current = controller;
-      busyRef.current = job;
-      setBusy(job);
-      setProgress(0);
-      setError(null);
-      try {
-        await task(controller.signal);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Clip generation failed.");
-      } finally {
-        busyRef.current = null;
-        setBusy(null);
-        setStatusText("");
-        abortRef.current = null;
-      }
-    },
-    []
-  );
-
-  // Cut every highlight as soon as the report lands, so each card only needs a
-  // download. One ffmpeg session handles the whole queue; clips appear as they finish.
-  useEffect(() => {
-    if (!sourceFile || highlights.length === 0) return;
-    if (autoStartedFor.current === sourceFile) return;
-    autoStartedFor.current = sourceFile;
-
-    void runJob("auto", async (signal) => {
-      setStatusText(`Preparing ${highlights.length} clips...`);
-      await extractClips(sourceFile, highlights.map(clipWindow), {
-        signal,
-        onProgress: setProgress,
-        onClip: (clip) => storeClip(clip.id, clip.blob),
-        onClipDone: (done, total) => setStatusText(`Cut ${done} of ${total} clips`),
-      });
-    });
-  }, [sourceFile, highlights, runJob, storeClip]);
-
   if (highlights.length === 0) return null;
-
-  const readyCount = highlights.filter((highlight) => clips[highlight.id]).length;
-  const autoRunning = busy === "auto";
 
   const typeOptions = [
     { value: "all", label: "All", count: highlights.length },
@@ -187,71 +126,12 @@ export function HighlightClips({
     })),
   ];
 
-  const generateOne = (highlight: Highlight) =>
-    runJob(highlight.id, async () => {
-      if (!sourceFile) return;
-      setStatusText(`Cutting “${highlight.title}”...`);
-      const blob = await extractClip(
-        sourceFile,
-        timeToSeconds(highlight.startTimestamp),
-        timeToSeconds(highlight.endTimestamp),
-        { onProgress: setProgress }
-      );
-      storeClip(highlight.id, blob);
-    });
-
-  const downloadZip = () =>
-    runJob("zip", async (signal) => {
-      if (!sourceFile) return;
-
-      // Anything the auto-cut has not reached yet is cut now; state updates land
-      // after this callback, so freshly cut blobs are also kept locally.
-      const missing = visible.filter((highlight) => !clips[highlight.id]);
-      const freshlyCut = new Map<string, Blob>();
-
-      if (missing.length > 0) {
-        await extractClips(sourceFile, missing.map(clipWindow), {
-          signal,
-          onProgress: setProgress,
-          onClip: (clip) => {
-            freshlyCut.set(clip.id, clip.blob);
-            storeClip(clip.id, clip.blob);
-          },
-          onClipDone: (done, total) => setStatusText(`Cut ${done} of ${total} remaining clips`),
-        });
-      }
-
-      setStatusText("Packing the ZIP...");
-      const entries = visible
-        .map((highlight) => ({
-          highlight,
-          blob: clips[highlight.id]?.blob ?? freshlyCut.get(highlight.id),
-        }))
-        .filter((entry): entry is { highlight: Highlight; blob: Blob } => Boolean(entry.blob))
-        .map((entry) => ({
-          name: `clips/${slugifyFilename(clipWindow(entry.highlight).label)}.mp4`,
-          data: entry.blob,
-        }));
-
-      downloadBlob(await createZip(entries), `highlight-clips-${entries.length}.zip`);
-    });
-
-  const generateReel = () =>
-    runJob("reel", async (signal) => {
-      if (!sourceFile) return;
-      const reel = await buildHighlightReel(sourceFile, visible.map(clipWindow), {
-        signal,
-        onProgress: setProgress,
-        onClipDone: (done, total) => setStatusText(`Adding moment ${done} of ${total}...`),
-      });
-      const name =
-        playerFilter !== "all"
-          ? `player-${slugifyFilename(playerFilter)}-highlights.mp4`
-          : typeFilter !== "all"
-            ? `${slugifyFilename(TYPE_LABELS[typeFilter as HighlightType])}-reel.mp4`
-            : "match-highlights.mp4";
-      downloadBlob(reel, name);
-    });
+  const reelFilename =
+    playerFilter !== "all"
+      ? `player-${slugifyFilename(playerFilter)}-highlights.mp4`
+      : typeFilter !== "all"
+        ? `${slugifyFilename(TYPE_LABELS[typeFilter as HighlightType])}-reel.mp4`
+        : "match-highlights.mp4";
 
   return (
     <SectionCard
@@ -293,7 +173,7 @@ export function HighlightClips({
           <Button
             size="sm"
             className="bg-indigo-600 text-white hover:bg-indigo-700"
-            onClick={downloadZip}
+            onClick={() => downloadZip(visible)}
             disabled={busy !== null}
           >
             <Download className="h-3.5 w-3.5" />
@@ -303,7 +183,7 @@ export function HighlightClips({
             size="sm"
             variant="outline"
             className="border-white/10 bg-white/5 text-white"
-            onClick={generateReel}
+            onClick={() => buildReel(visible, reelFilename)}
             disabled={busy !== null}
           >
             <Film className="h-3.5 w-3.5" />
@@ -325,7 +205,7 @@ export function HighlightClips({
               <button
                 type="button"
                 className="text-gray-500 hover:text-white"
-                onClick={() => abortRef.current?.abort()}
+                onClick={cancel}
               >
                 cancel
               </button>
@@ -424,7 +304,7 @@ export function HighlightClips({
                         size="sm"
                         className="bg-indigo-600 text-white hover:bg-indigo-700"
                         onClick={() =>
-                          downloadBlob(clip.blob, `${clipWindow(highlight).label}.mp4`)
+                          downloadBlob(clip.blob, `${clipWindowFor(highlight).label}.mp4`)
                         }
                       >
                         <Download className="h-3.5 w-3.5" />
