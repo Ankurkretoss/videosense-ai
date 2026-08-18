@@ -170,6 +170,34 @@ export function TacticsTab({ analysis }: { analysis: SportsAnalysis }) {
             ))}
           </div>
         )}
+
+        {analysis.improvements.length > 0 && (
+          <Card className="p-4">
+            <SectionEyebrow color="#C3B2FF">Coaching improvements</SectionEyebrow>
+            <div className="mt-3 flex flex-col gap-2.5">
+              {analysis.improvements.map((item, index) => (
+                <div key={index} className="rounded-[10px] bg-white/[0.03] p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono-num text-[11px] text-brand">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="text-[12px] font-semibold text-brand-soft">{item.area}</span>
+                    {item.timestamp && (
+                      <span className="font-mono-num text-[11px] text-mute-3">{item.timestamp}</span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-[1.5] text-ink-400">{item.issue}</p>
+                  {item.recommendation && (
+                    <p className="mt-1.5 text-[12px] leading-[1.5] text-good">{item.recommendation}</p>
+                  )}
+                  {item.drill && (
+                    <p className="mt-1.5 text-[11.5px] leading-[1.5] text-mute-3">Drill: {item.drill}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -244,34 +272,6 @@ export function TacticsTab({ analysis }: { analysis: SportsAnalysis }) {
             ))}
           </div>
         </Card>
-
-        {analysis.improvements.length > 0 && (
-          <Card className="p-4">
-            <SectionEyebrow color="#C3B2FF">Coaching improvements</SectionEyebrow>
-            <div className="mt-3 flex flex-col gap-2.5">
-              {analysis.improvements.map((item, index) => (
-                <div key={index} className="rounded-[10px] bg-white/[0.03] p-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono-num text-[11px] text-brand">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                    <span className="text-[12px] font-semibold text-brand-soft">{item.area}</span>
-                    {item.timestamp && (
-                      <span className="font-mono-num text-[11px] text-mute-3">{item.timestamp}</span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 text-[12.5px] leading-[1.5] text-ink-400">{item.issue}</p>
-                  {item.recommendation && (
-                    <p className="mt-1.5 text-[12px] leading-[1.5] text-good">{item.recommendation}</p>
-                  )}
-                  {item.drill && (
-                    <p className="mt-1.5 text-[11.5px] leading-[1.5] text-mute-3">Drill: {item.drill}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
 
         {analysis.report.bestXI.length > 0 && (
           <Card className="p-4">

@@ -165,14 +165,14 @@ export function EventsTab({
               <div className="mt-0.5 text-[12px] text-mute-2">{row.detail}</div>
             </div>
             <div className="flex items-center gap-2">
-              <button
+              {/* <button
                 type="button"
                 disabled={!onSeek}
                 onClick={() => onSeek?.(row.seconds)}
                 className="rounded-[7px] border border-brand/30 px-2.5 py-1.5 text-[11.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/10 disabled:border-white/10 disabled:text-mute-3"
               >
                 Play clip
-              </button>
+              </button> */}
             </div>
           </div>
         ))}
