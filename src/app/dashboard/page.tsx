@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, Film, Loader2, Plus } from "lucide-react";
+import { AlertCircle, Film, Link2, Loader2, Plus, Upload } from "lucide-react";
 import { Chip, Kpi, Panel, PrimaryLink, StatusPill } from "@/components/vantage/ui";
 import { listAnalyses, type StoredAnalysisSummary } from "@/lib/analysis-store";
 import { isFirebaseConfigured } from "@/lib/firebase";
@@ -189,9 +189,22 @@ export function MatchCard({ entry }: { entry: StoredAnalysisSummary }) {
             </div>
           )}
           <div className="absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-[rgba(7,7,10,0.95)] to-transparent" />
-          <div className="absolute top-3 left-3 flex gap-1.5">
-            <StatusPill className="border border-brand/30 bg-ink/80">Football</StatusPill>
-            <StatusPill tone="good">Completed</StatusPill>
+          <div className="absolute top-3 left-3 flex flex-wrap gap-1.5">
+            <StatusPill className="border border-brand/30 bg-ink-800/95">Football</StatusPill>
+            <StatusPill tone="good" className="border border-good/30 bg-ink-800/95">
+              Completed
+            </StatusPill>
+            {entry.sourceType === "youtube" ? (
+              <StatusPill className="flex items-center gap-1 border border-white/15 bg-ink-800/95">
+                <Link2 className="h-3 w-3" />
+                YouTube
+              </StatusPill>
+            ) : (
+              <StatusPill className="flex items-center gap-1 border border-white/15 bg-ink-800/95">
+                <Upload className="h-3 w-3" />
+                Uploaded
+              </StatusPill>
+            )}
           </div>
           <div className="absolute bottom-3 left-3.5 right-3.5">
             <div className="truncate text-[15px] font-bold">{entry.title}</div>

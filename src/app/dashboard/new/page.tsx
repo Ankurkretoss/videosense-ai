@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 import {
   AlertCircle,
@@ -24,97 +24,29 @@ import {
 import { MatchReport } from "@/components/vantage/report/MatchReport";
 import { ProcessingScreen } from "@/components/vantage/ProcessingScreen";
 import { ArchiveBanner } from "@/components/vantage/ArchiveBanner";
-import { useUpload } from "@/hooks/useUpload";
-import { useSportsAnalysis } from "@/hooks/useSportsAnalysis";
-import { useHighlightClips } from "@/hooks/useHighlightClips";
-import { useAnalysisArchive } from "@/hooks/useAnalysisArchive";
-import { useClipArchive } from "@/hooks/useClipArchive";
-import { useSourceArchive } from "@/hooks/useSourceArchive";
+import { useAnalysisJobContext } from "@/components/vantage/AnalysisJobProvider";
 import { SPORTS } from "@/lib/vantage-content";
-import { ACCEPTED_VIDEO_TYPES, MAX_FILE_SIZE, YOUTUBE_URL_PATTERN } from "@/lib/constants";
-import { probeVideoFile } from "@/lib/video-meta";
+import { ACCEPTED_VIDEO_TYPES, MAX_FILE_SIZE } from "@/lib/constants";
 import { secondsToTimestamp } from "@/lib/time";
-import type { Highlight } from "@/types/sports-analysis";
 import { cn } from "@/lib/utils";
-
-const EMPTY_HIGHLIGHTS: Highlight[] = [];
 
 function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function NewAnalysisPage() {
-  const upload = useUpload();
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [configState, setConfigState] = useState<"loading" | "ready" | "missing">("loading");
-  const [urlDraft, setUrlDraft] = useState("");
-  const [probe, setProbe] = useState<{ durationSeconds: number } | null>(null);
-  const [sessionKey] = useState(() => `session-${Date.now().toString(36)}`);
-  const [skipWait, setSkipWait] = useState(false);
-  const analysis = useSportsAnalysis(apiKey);
-
-  const clipState = useHighlightClips(
-    analysis.result?.highlights ?? EMPTY_HIGHLIGHTS,
-    analysis.status === "completed" ? upload.file : null
-  );
-  const archive = useAnalysisArchive(
-    analysis.status === "completed" ? analysis.result : null,
-    upload.file ? "file" : "youtube"
-  );
-
-  // Clips are pushed to cloud storage straight from the browser, so the saved
-  // report still has them when the original file is gone.
-  const matchKey = archive.savedId ?? sessionKey;
-  const clipArchive = useClipArchive({
-    clips: clipState.clips,
-    matchKey,
-    analysisId: archive.savedId,
-    enabled: Boolean(upload.file),
-  });
-
-  // The original video starts uploading the moment analysis begins, in parallel
-  // with the AI passes, so it is already archived by the time they finish.
-  const sourceArchive = useSourceArchive({
-    file: upload.file,
-    matchKey,
-    analysisId: archive.savedId,
-    enabled: Boolean(upload.file) && analysis.status !== "idle",
-  });
-
-  useEffect(() => {
-    let active = true;
-    fetch("/api/config")
-      .then((response) => response.json())
-      .then((data) => {
-        if (!active) return;
-        if (data.configured && data.apiKey) {
-          setApiKey(data.apiKey);
-          setConfigState("ready");
-        } else {
-          setConfigState("missing");
-        }
-      })
-      .catch(() => active && setConfigState("missing"));
-
-    return () => {
-      active = false;
-    };
-  }, []);
+  // The job itself lives above this page (see AnalysisJobProvider), so switching
+  // tabs or navigating elsewhere mid-analysis never interrupts it — this page is
+  // just a view onto whatever the shared job is doing right now.
+  const job = useAnalysisJobContext();
+  const { upload, analysis, clipState, archive, clipArchive, sourceArchive } = job;
 
   const onDrop = useCallback(
     (accepted: File[]) => {
       const file = accepted[0];
-      if (!file) return;
-      if (file.size > MAX_FILE_SIZE) {
-        upload.setError(`That file is larger than ${Math.round(MAX_FILE_SIZE / (1024 * 1024))} MB.`);
-        return;
-      }
-      upload.setFile(file);
-      void probeVideoFile(file).then((result) =>
-        setProbe({ durationSeconds: result.durationSeconds })
-      );
+      if (file) job.handleFileSelected(file);
     },
-    [upload]
+    [job]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -124,62 +56,7 @@ export default function NewAnalysisPage() {
     disabled: analysis.isAnalyzing,
   });
 
-  const submitUrl = () => {
-    const value = urlDraft.trim();
-    if (!YOUTUBE_URL_PATTERN.test(value)) {
-      upload.setError("That does not look like a YouTube URL.");
-      return;
-    }
-    upload.setYoutubeUrl(value);
-  };
-
-  const start = () => {
-    setSkipWait(false);
-    if (upload.file) analysis.analyze(upload.file, "");
-    else if (upload.youtubeUrl) analysis.analyze(null, upload.youtubeUrl);
-  };
-
-  /* The report is only shown once the clips and the original video exist and are
-     safely in storage, so the analysis screen covers the whole job rather than
-     just the AI passes. The video itself started uploading back when analysis
-     began, so this wait is usually short — it is mostly already done by now. */
-  const analysisDone = analysis.status === "completed" && analysis.result !== null;
-  const totalClips = analysis.result?.highlights.length ?? 0;
-  const clipsExpected = Boolean(upload.file) && totalClips > 0;
-  const videoExpected = Boolean(upload.file);
-
-  const cutDone =
-    !clipsExpected || clipState.readyCount >= totalClips || clipState.error !== null;
-  const uploadsDone =
-    !clipsExpected ||
-    clipArchive.status === "error" ||
-    (cutDone && clipArchive.uploaded >= clipState.readyCount);
-  const videoDone =
-    !videoExpected || sourceArchive.status === "stored" || sourceArchive.status === "error";
-
-  const finishing = analysisDone && !(cutDone && uploadsDone && videoDone) && !skipWait;
-
-  const percent = !analysisDone
-    ? analysis.progress.progress * 0.85
-    : !cutDone
-      ? 85 + (clipState.readyCount / Math.max(1, totalClips)) * 6
-      : !uploadsDone
-        ? 91 + (clipArchive.uploaded / Math.max(1, totalClips)) * 6
-        : !videoDone
-          ? 97 + (sourceArchive.percent / 100) * 3
-          : 100;
-
-  const stageMessage = !analysisDone
-    ? analysis.progress.message
-    : !cutDone
-      ? `Cutting highlight clips — ${clipState.readyCount} of ${totalClips} ready...`
-      : !uploadsDone
-        ? `Saving clips to cloud storage — ${clipArchive.uploaded} of ${totalClips} stored...`
-        : !videoDone
-          ? `Saving original video to cloud storage — ${sourceArchive.percent}%...`
-          : "Finishing up...";
-
-  if (analysisDone && analysis.result && !finishing) {
+  if (job.analysisDone && analysis.result && !job.finishing) {
     return (
       <div className="px-4 pt-7 pb-24 sm:px-6">
         <MatchReport
@@ -204,14 +81,7 @@ export default function NewAnalysisPage() {
               <div className="min-w-0 flex-1">
                 <ArchiveBanner archive={archive} />
               </div>
-              <PrimaryButton
-                onClick={() => {
-                  analysis.reset();
-                  upload.clearUpload();
-                  setUrlDraft("");
-                }}
-                className="px-4 py-2.5 text-[13px]"
-              >
+              <PrimaryButton onClick={job.resetForNewMatch} className="px-4 py-2.5 text-[13px]">
                 Analyse another match
               </PrimaryButton>
             </div>
@@ -228,7 +98,7 @@ export default function NewAnalysisPage() {
         Upload footage or paste a link. The AI handles detection, tracking, events, tactics and clips.
       </p>
 
-      {configState === "missing" && (
+      {job.configState === "missing" && (
         <Panel className="mb-4 flex items-start gap-3 border-warn/30 bg-warn/[0.06] p-4 text-[13px] text-warn">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
@@ -297,14 +167,14 @@ export default function NewAnalysisPage() {
           <div className="mt-3.5 flex items-center gap-2 rounded-[10px] border border-white/[0.09] bg-ink-800 px-3.5 py-3">
             <Link2 className="h-3.5 w-3.5 shrink-0 text-mute-4" />
             <input
-              value={urlDraft}
-              onChange={(event) => setUrlDraft(event.target.value)}
+              value={job.urlDraft}
+              onChange={(event) => job.setUrlDraft(event.target.value)}
               placeholder="https://youtube.com/watch?v=…"
               disabled={analysis.isAnalyzing}
               className="font-mono-num w-full bg-transparent text-[13px] text-ink-100 outline-none placeholder:text-mute-4"
             />
           </div>
-          <SoftButton type="button" onClick={submitUrl} className="mt-3 w-full">
+          <SoftButton type="button" onClick={job.submitUrl} className="mt-3 w-full">
             Use this link
           </SoftButton>
 
@@ -364,36 +234,36 @@ export default function NewAnalysisPage() {
         </Panel>
       )}
 
-      {analysis.isAnalyzing || finishing ? (
+      {analysis.isAnalyzing || job.finishing ? (
         <div className="mt-2">
           <ProcessingScreen
             title={upload.file?.name ?? "your match"}
-            durationLabel={probe ? secondsToTimestamp(probe.durationSeconds) : ""}
-            durationSeconds={probe?.durationSeconds ?? 0}
-            percent={percent}
-            message={stageMessage}
+            durationLabel={job.probe ? secondsToTimestamp(job.probe.durationSeconds) : ""}
+            durationSeconds={job.probe?.durationSeconds ?? 0}
+            percent={job.percent}
+            message={job.stageMessage}
             detail={analysis.detail}
             clipProgress={
-              finishing
+              job.finishing
                 ? {
                     cut: clipState.readyCount,
                     stored: clipArchive.uploaded,
-                    total: totalClips,
+                    total: job.totalClips,
                   }
                 : null
             }
-            onSkip={finishing ? () => setSkipWait(true) : undefined}
+            onSkip={job.finishing ? () => job.setSkipWait(true) : undefined}
             onCancel={analysis.cancel}
           />
         </div>
       ) : (
         <div className="mt-4 flex flex-wrap items-center gap-3.5 border-t border-white/[0.09] pt-5">
           <PrimaryButton
-            onClick={start}
-            disabled={!upload.hasUpload || configState !== "ready"}
+            onClick={job.start}
+            disabled={!upload.hasUpload || job.configState !== "ready"}
             className="px-6 py-3.5 text-[14px]"
           >
-            {configState === "loading" ? (
+            {job.configState === "loading" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Sparkles className="h-4 w-4" />

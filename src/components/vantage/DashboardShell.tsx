@@ -7,6 +7,7 @@ import { Bell, ChevronDown, Menu, Plus, Search, X } from "lucide-react";
 import { DASHBOARD_NAV } from "@/lib/vantage-content";
 import { endSession, initials, readSession, type SessionUser } from "@/lib/session";
 import { ComingSoonBadge } from "@/components/vantage/ui";
+import { JobStatusBadge } from "@/components/vantage/JobStatusBadge";
 import { cn } from "@/lib/utils";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -153,6 +154,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         {navOpen && (
           <div className="border-b border-white/10 bg-ink-700 p-3.5 lg:hidden">{navList}</div>
         )}
+
+        <JobStatusBadge />
 
         {children}
       </main>
