@@ -72,7 +72,11 @@ export function MatchReport({
         return;
       }
 
-      if (youtubeId) setEmbedSeek((current) => ({ seconds: target, nonce: current.nonce + 1 }));
+      if (youtubeId) {
+        // The embed lives on the Overview tab, so jump there before seeking.
+        setTab("Overview");
+        setEmbedSeek((current) => ({ seconds: target, nonce: current.nonce + 1 }));
+      }
     },
     [youtubeId]
   );
@@ -193,6 +197,7 @@ export function MatchReport({
           highlights={analysis.highlights}
           clipState={clips}
           hasSourceFile={Boolean(sourceFile)}
+          youtubeId={youtubeId}
           onSeek={seek}
         />
       )}

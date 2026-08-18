@@ -3,6 +3,7 @@
 import type { RefObject } from "react";
 import { Play } from "lucide-react";
 import { Card, CardTitle, EVENT_COLORS, SectionEyebrow, VersusRow } from "./report-bits";
+import { YouTubeMoment } from "@/components/vantage/YouTubeMoment";
 import { timeToSeconds } from "@/lib/time";
 import type { SportsAnalysis } from "@/types/sports-analysis";
 
@@ -71,15 +72,13 @@ export function OverviewTab({
             {fileSrc ? (
               <video ref={videoRef} src={fileSrc} controls className="h-full w-full bg-black" />
             ) : youtubeId ? (
-              <iframe
+              <YouTubeMoment
                 key={embedSeek.nonce}
-                src={`https://www.youtube.com/embed/${youtubeId}?start=${Math.floor(
-                  embedSeek.seconds
-                )}${embedSeek.nonce > 0 ? "&autoplay=1" : ""}`}
+                videoId={youtubeId}
+                startSeconds={embedSeek.seconds}
                 title={analysis.metadata.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; picture-in-picture"
-                allowFullScreen
-                className="h-full w-full border-0 bg-black"
+                autoplay={embedSeek.nonce > 0}
+                className="h-full w-full"
               />
             ) : (
               <>

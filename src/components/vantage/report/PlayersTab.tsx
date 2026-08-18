@@ -202,7 +202,7 @@ export function PlayersTab({ analysis }: { analysis: SportsAnalysis }) {
       {analysis.awards.length > 0 && (
         <Card className="mb-4 p-[18px]">
           <SectionEyebrow color="#C3B2FF">Standout performers</SectionEyebrow>
-          <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2.5">
+          <div className="mt-3.5 grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-2.5">
             {analysis.awards.map((award, index) => (
               <div
                 key={`${award.category}-${index}`}
@@ -221,7 +221,7 @@ export function PlayersTab({ analysis }: { analysis: SportsAnalysis }) {
         </Card>
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(330px,1fr))] items-stretch gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] items-stretch gap-4">
         {visible.map((player) => (
           <PlayerCard key={player.id} player={player} />
         ))}

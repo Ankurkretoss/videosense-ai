@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, Film, Loader2, Play, Scissors } from "lucide-react";
+import { Download, ExternalLink, Film, Loader2, Play, Scissors } from "lucide-react";
 import { Card } from "./report-bits";
+import { YouTubeMoment } from "@/components/vantage/YouTubeMoment";
 import { Chip, PrimaryButton, SoftButton } from "@/components/vantage/ui";
 import { downloadBlob } from "@/lib/clip";
 import { clipWindowFor, type HighlightClipsState } from "@/hooks/useHighlightClips";
@@ -63,12 +64,22 @@ interface ClipsTabProps {
   highlights: Highlight[];
   clipState: HighlightClipsState;
   hasSourceFile: boolean;
+  /** Set when the analysis came from a link — clips play from the embed instead. */
+  youtubeId?: string | null;
   onSeek?: (seconds: number) => void;
 }
 
-export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: ClipsTabProps) {
+export function ClipsTab({
+  highlights,
+  clipState,
+  hasSourceFile,
+  youtubeId = null,
+  onSeek,
+}: ClipsTabProps) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [playerFilter, setPlayerFilter] = useState("all");
+  // Which card is currently playing its moment from the YouTube embed.
+  const [playingId, setPlayingId] = useState<string | null>(null);
 
   const players = useMemo(() => {
     const seen = new Set<string>();
@@ -120,7 +131,11 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
           <div className="font-mono-num mt-1 text-[12.5px] text-mute-3">
             {visible.length} clips · {Math.floor(totalSeconds / 60)}:
             {String(Math.round(totalSeconds % 60)).padStart(2, "0")} total
-            {hasSourceFile && ` · ${clipState.readyCount}/${clipState.total} cut`}
+            {hasSourceFile
+              ? ` · ${clipState.readyCount}/${clipState.total} cut`
+              : youtubeId
+                ? " · plays from the linked video"
+                : ""}
           </div>
         </div>
         {hasSourceFile && (
@@ -198,7 +213,7 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
         </Card>
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] items-stretch gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-stretch gap-4">
         {visible.map((highlight) => {
           const clip = clipState.clips[highlight.id];
           const badge = tone(highlight.type);
@@ -212,12 +227,23 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
               <div className="hatch relative aspect-video">
                 {clip ? (
                   <video src={clip.url} controls className="h-full w-full bg-black" />
+                ) : playingId === highlight.id && youtubeId ? (
+                  <YouTubeMoment
+                    videoId={youtubeId}
+                    startSeconds={timeToSeconds(highlight.startTimestamp)}
+                    title={highlight.title}
+                    className="h-full w-full"
+                  />
                 ) : (
                   <>
                     <div className="absolute inset-0 grid place-items-center">
                       <button
                         type="button"
-                        onClick={() => onSeek?.(timeToSeconds(highlight.startTimestamp))}
+                        onClick={() =>
+                          youtubeId
+                            ? setPlayingId(highlight.id)
+                            : onSeek?.(timeToSeconds(highlight.startTimestamp))
+                        }
                         className="grid h-10 w-10 place-items-center rounded-full border border-white/25 bg-ink/70 text-white transition-colors hover:border-brand/60"
                         aria-label="Play from this moment"
                       >
@@ -258,13 +284,18 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
                 <div className="mt-3 flex gap-1.5">
                   <button
                     type="button"
-                    onClick={() => onSeek?.(timeToSeconds(highlight.startTimestamp))}
-                    disabled={!onSeek}
+                    onClick={() =>
+                      youtubeId
+                        ? setPlayingId(highlight.id)
+                        : onSeek?.(timeToSeconds(highlight.startTimestamp))
+                    }
+                    disabled={!youtubeId && !onSeek}
                     className="flex-1 rounded-lg bg-brand/[0.14] py-2 text-[11.5px] font-semibold text-brand-soft transition-colors hover:bg-brand/20 disabled:opacity-50"
                   >
                     Watch
                   </button>
-                  {clip ? (
+
+                  {clip && (
                     <button
                       type="button"
                       onClick={() =>
@@ -274,14 +305,17 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
                     >
                       Download
                     </button>
-                  ) : (
+                  )}
+
+                  {/* Cutting needs the original file; a link can only be opened on YouTube. */}
+                  {!clip && hasSourceFile && (
                     <button
                       type="button"
                       onClick={() => clipState.generateOne(highlight)}
-                      disabled={!hasSourceFile || clipState.busy !== null}
+                      disabled={clipState.busy !== null}
                       className={cn(
                         "flex-1 rounded-lg bg-white/[0.05] py-2 text-[11.5px] font-semibold text-ink-400 transition-colors hover:bg-white/10",
-                        (!hasSourceFile || clipState.busy !== null) && "opacity-50"
+                        clipState.busy !== null && "opacity-50"
                       )}
                     >
                       <span className="inline-flex items-center gap-1.5">
@@ -289,6 +323,22 @@ export function ClipsTab({ highlights, clipState, hasSourceFile, onSeek }: Clips
                         Cut clip
                       </span>
                     </button>
+                  )}
+
+                  {!clip && !hasSourceFile && youtubeId && (
+                    <a
+                      href={`https://www.youtube.com/watch?v=${youtubeId}&t=${Math.floor(
+                        timeToSeconds(highlight.startTimestamp)
+                      )}s`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 rounded-lg bg-white/[0.05] py-2 text-center text-[11.5px] font-semibold text-ink-400 transition-colors hover:bg-white/10"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <ExternalLink className="h-3 w-3" />
+                        On YouTube
+                      </span>
+                    </a>
                   )}
                 </div>
               </div>
