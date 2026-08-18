@@ -40,6 +40,10 @@ interface ProcessingScreenProps {
   /** Assumed frame rate, only used for the frame counter chip. */
   fps?: number;
   durationSeconds?: number;
+  /** Clip cutting and upload progress, shown once the AI passes are done. */
+  clipProgress?: { cut: number; stored: number; total: number } | null;
+  /** Offered while clips finish in the background. */
+  onSkip?: () => void;
   onCancel: () => void;
 }
 
@@ -51,6 +55,8 @@ export function ProcessingScreen({
   detail,
   fps = 25,
   durationSeconds = 0,
+  clipProgress = null,
+  onSkip,
   onCancel,
 }: ProcessingScreenProps) {
   const activeIndex = Math.min(
@@ -155,8 +161,18 @@ export function ProcessingScreen({
               {[
                 { k: "Players detected", v: detail.players ?? "—" },
                 { k: "Events so far", v: detail.events ?? "—" },
-                { k: "Clips queued", v: detail.clips ?? "—" },
-                { k: "Passes", v: `${activeIndex >= 3 ? 2 : 1} of 3` },
+                {
+                  k: clipProgress ? "Clips cut" : "Clips queued",
+                  v: clipProgress
+                    ? `${clipProgress.cut}/${clipProgress.total}`
+                    : (detail.clips ?? "—"),
+                },
+                {
+                  k: clipProgress ? "Saved to cloud" : "Passes",
+                  v: clipProgress
+                    ? `${clipProgress.stored}/${clipProgress.total}`
+                    : `${activeIndex >= 3 ? 2 : 1} of 3`,
+                },
               ].map((tile) => (
                 <div key={tile.k} className="rounded-[11px] bg-white/[0.03] p-3">
                   <div className="font-mono-num text-[18px] text-ink-200">{tile.v}</div>
@@ -214,13 +230,23 @@ export function ProcessingScreen({
             report rather than presented as fact.
           </div>
 
-          <button
-            type="button"
-            onClick={onCancel}
-            className="mt-3 w-full rounded-[11px] border border-white/[0.12] bg-white/[0.03] py-3 text-[13.5px] font-bold text-ink-300 transition-colors hover:border-bad/40 hover:text-bad"
-          >
-            Cancel analysis
-          </button>
+          {onSkip ? (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="mt-3 w-full rounded-[11px] border border-brand/35 bg-brand/[0.12] py-3 text-[13.5px] font-bold text-brand-soft transition-colors hover:bg-brand/20"
+            >
+              Skip to the report →
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="mt-3 w-full rounded-[11px] border border-white/[0.12] bg-white/[0.03] py-3 text-[13.5px] font-bold text-ink-300 transition-colors hover:border-bad/40 hover:text-bad"
+            >
+              Cancel analysis
+            </button>
+          )}
         </Panel>
       </div>
     </div>

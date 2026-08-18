@@ -84,6 +84,10 @@ export default function StoredMatchPage() {
             analysis={entry.analysis}
             youtubeUrl={entry.sourceType === "youtube" ? entry.source : null}
             savedAt={entry.createdAt}
+            storedClips={Object.fromEntries(
+              Object.entries(entry.clips ?? {}).map(([id, ref]) => [id, ref.key])
+            )}
+            storedVideoKey={entry.sourceVideo?.key ?? null}
             note={
               <Panel className="flex flex-wrap items-center gap-3 p-3 text-[12px] text-mute">
                 <span className="flex items-center gap-1.5">
@@ -102,7 +106,13 @@ export default function StoredMatchPage() {
                 )}
                 {entry.sourceType === "file" && (
                   <span className="ml-auto">
-                    Clip cutting needs the original file — re-upload it to cut clips again.
+                    {entry.sourceVideo && Object.keys(entry.clips ?? {}).length > 0
+                      ? `Original video and ${Object.keys(entry.clips).length} clips play from cloud storage.`
+                      : entry.sourceVideo
+                        ? "Original video plays from cloud storage."
+                        : Object.keys(entry.clips ?? {}).length > 0
+                          ? `${Object.keys(entry.clips).length} clips play from cloud storage.`
+                          : "Clip cutting needs the original file — re-upload it to cut clips again."}
                   </span>
                 )}
               </Panel>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, ExternalLink, Film, Loader2, Play, Scissors } from "lucide-react";
+import { Cloud, Download, ExternalLink, Film, Loader2, Play, Scissors } from "lucide-react";
 import { Card } from "./report-bits";
 import { YouTubeMoment } from "@/components/vantage/YouTubeMoment";
 import { Chip, PrimaryButton, SoftButton } from "@/components/vantage/ui";
@@ -66,6 +66,10 @@ interface ClipsTabProps {
   hasSourceFile: boolean;
   /** Set when the analysis came from a link — clips play from the embed instead. */
   youtubeId?: string | null;
+  /** Highlight id → object key for clips already in cloud storage. */
+  storedClips?: Record<string, string>;
+  /** Progress of the background upload to cloud storage. */
+  uploadNote?: string | null;
   onSeek?: (seconds: number) => void;
 }
 
@@ -74,6 +78,8 @@ export function ClipsTab({
   clipState,
   hasSourceFile,
   youtubeId = null,
+  storedClips = {},
+  uploadNote = null,
   onSeek,
 }: ClipsTabProps) {
   const [typeFilter, setTypeFilter] = useState("all");
@@ -136,6 +142,7 @@ export function ClipsTab({
               : youtubeId
                 ? " · plays from the linked video"
                 : ""}
+            {uploadNote ? ` · ${uploadNote}` : ""}
           </div>
         </div>
         {hasSourceFile && (
@@ -216,6 +223,8 @@ export function ClipsTab({
       <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-stretch gap-4">
         {visible.map((highlight) => {
           const clip = clipState.clips[highlight.id];
+          const storedKey = storedClips[highlight.id];
+          const storedUrl = storedKey ? `/api/clips/play?key=${encodeURIComponent(storedKey)}` : null;
           const badge = tone(highlight.type);
           const cutting = clipState.busy === highlight.id;
 
@@ -227,6 +236,8 @@ export function ClipsTab({
               <div className="hatch relative aspect-video">
                 {clip ? (
                   <video src={clip.url} controls className="h-full w-full bg-black" />
+                ) : storedUrl ? (
+                  <video src={storedUrl} controls preload="metadata" className="h-full w-full bg-black" />
                 ) : playingId === highlight.id && youtubeId ? (
                   <YouTubeMoment
                     videoId={youtubeId}
@@ -270,6 +281,14 @@ export function ClipsTab({
                 <span className="font-mono-num absolute right-2.5 bottom-2.5 rounded-[5px] bg-ink/80 px-1.5 py-0.5 text-[11px] text-ink-300">
                   {highlight.startTimestamp}
                 </span>
+                {storedKey && (
+                  <span
+                    title="Saved in cloud storage"
+                    className="absolute top-2.5 right-2.5 grid h-6 w-6 place-items-center rounded-md bg-ink/80 text-good"
+                  >
+                    <Cloud className="h-3.5 w-3.5" />
+                  </span>
+                )}
               </div>
 
               <div className="p-3.5">
@@ -307,8 +326,18 @@ export function ClipsTab({
                     </button>
                   )}
 
+                  {!clip && storedUrl && (
+                    <a
+                      href={storedUrl}
+                      download={`${clipWindowFor(highlight).label}.mp4`}
+                      className="flex-1 rounded-lg bg-white/[0.05] py-2 text-center text-[11.5px] font-semibold text-ink-400 transition-colors hover:bg-white/10"
+                    >
+                      Download
+                    </a>
+                  )}
+
                   {/* Cutting needs the original file; a link can only be opened on YouTube. */}
-                  {!clip && hasSourceFile && (
+                  {!clip && !storedUrl && hasSourceFile && (
                     <button
                       type="button"
                       onClick={() => clipState.generateOne(highlight)}
@@ -325,7 +354,7 @@ export function ClipsTab({
                     </button>
                   )}
 
-                  {!clip && !hasSourceFile && youtubeId && (
+                  {!clip && !storedUrl && !hasSourceFile && youtubeId && (
                     <a
                       href={`https://www.youtube.com/watch?v=${youtubeId}&t=${Math.floor(
                         timeToSeconds(highlight.startTimestamp)

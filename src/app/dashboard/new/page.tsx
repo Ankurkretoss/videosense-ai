@@ -28,6 +28,8 @@ import { useUpload } from "@/hooks/useUpload";
 import { useSportsAnalysis } from "@/hooks/useSportsAnalysis";
 import { useHighlightClips } from "@/hooks/useHighlightClips";
 import { useAnalysisArchive } from "@/hooks/useAnalysisArchive";
+import { useClipArchive } from "@/hooks/useClipArchive";
+import { useSourceArchive } from "@/hooks/useSourceArchive";
 import { SPORTS } from "@/lib/vantage-content";
 import { ACCEPTED_VIDEO_TYPES, MAX_FILE_SIZE, YOUTUBE_URL_PATTERN } from "@/lib/constants";
 import { probeVideoFile } from "@/lib/video-meta";
@@ -47,6 +49,8 @@ export default function NewAnalysisPage() {
   const [configState, setConfigState] = useState<"loading" | "ready" | "missing">("loading");
   const [urlDraft, setUrlDraft] = useState("");
   const [probe, setProbe] = useState<{ durationSeconds: number } | null>(null);
+  const [sessionKey] = useState(() => `session-${Date.now().toString(36)}`);
+  const [skipWait, setSkipWait] = useState(false);
   const analysis = useSportsAnalysis(apiKey);
 
   const clipState = useHighlightClips(
@@ -57,6 +61,25 @@ export default function NewAnalysisPage() {
     analysis.status === "completed" ? analysis.result : null,
     upload.file ? "file" : "youtube"
   );
+
+  // Clips are pushed to cloud storage straight from the browser, so the saved
+  // report still has them when the original file is gone.
+  const matchKey = archive.savedId ?? sessionKey;
+  const clipArchive = useClipArchive({
+    clips: clipState.clips,
+    matchKey,
+    analysisId: archive.savedId,
+    enabled: Boolean(upload.file),
+  });
+
+  // The original video starts uploading the moment analysis begins, in parallel
+  // with the AI passes, so it is already archived by the time they finish.
+  const sourceArchive = useSourceArchive({
+    file: upload.file,
+    matchKey,
+    analysisId: archive.savedId,
+    enabled: Boolean(upload.file) && analysis.status !== "idle",
+  });
 
   useEffect(() => {
     let active = true;
@@ -111,13 +134,52 @@ export default function NewAnalysisPage() {
   };
 
   const start = () => {
+    setSkipWait(false);
     if (upload.file) analysis.analyze(upload.file, "");
     else if (upload.youtubeUrl) analysis.analyze(null, upload.youtubeUrl);
   };
 
-  const percent = analysis.progress.progress;
+  /* The report is only shown once the clips and the original video exist and are
+     safely in storage, so the analysis screen covers the whole job rather than
+     just the AI passes. The video itself started uploading back when analysis
+     began, so this wait is usually short — it is mostly already done by now. */
+  const analysisDone = analysis.status === "completed" && analysis.result !== null;
+  const totalClips = analysis.result?.highlights.length ?? 0;
+  const clipsExpected = Boolean(upload.file) && totalClips > 0;
+  const videoExpected = Boolean(upload.file);
 
-  if (analysis.status === "completed" && analysis.result) {
+  const cutDone =
+    !clipsExpected || clipState.readyCount >= totalClips || clipState.error !== null;
+  const uploadsDone =
+    !clipsExpected ||
+    clipArchive.status === "error" ||
+    (cutDone && clipArchive.uploaded >= clipState.readyCount);
+  const videoDone =
+    !videoExpected || sourceArchive.status === "stored" || sourceArchive.status === "error";
+
+  const finishing = analysisDone && !(cutDone && uploadsDone && videoDone) && !skipWait;
+
+  const percent = !analysisDone
+    ? analysis.progress.progress * 0.85
+    : !cutDone
+      ? 85 + (clipState.readyCount / Math.max(1, totalClips)) * 6
+      : !uploadsDone
+        ? 91 + (clipArchive.uploaded / Math.max(1, totalClips)) * 6
+        : !videoDone
+          ? 97 + (sourceArchive.percent / 100) * 3
+          : 100;
+
+  const stageMessage = !analysisDone
+    ? analysis.progress.message
+    : !cutDone
+      ? `Cutting highlight clips — ${clipState.readyCount} of ${totalClips} ready...`
+      : !uploadsDone
+        ? `Saving clips to cloud storage — ${clipArchive.uploaded} of ${totalClips} stored...`
+        : !videoDone
+          ? `Saving original video to cloud storage — ${sourceArchive.percent}%...`
+          : "Finishing up...";
+
+  if (analysisDone && analysis.result && !finishing) {
     return (
       <div className="px-4 pt-7 pb-24 sm:px-6">
         <MatchReport
@@ -126,6 +188,17 @@ export default function NewAnalysisPage() {
           filePreview={upload.preview}
           youtubeUrl={upload.youtubeUrl || null}
           clipState={clipState}
+          storedClips={clipArchive.stored}
+          storedVideoKey={sourceArchive.key}
+          uploadNote={
+            clipArchive.status === "uploading"
+              ? `${clipArchive.uploaded}/${clipArchive.total} saved to cloud`
+              : clipArchive.status === "stored" && clipArchive.uploaded > 0
+                ? `${clipArchive.uploaded} clips saved to cloud`
+                : clipArchive.status === "error"
+                  ? "cloud upload failed"
+                  : null
+          }
           note={
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex-1">
@@ -291,15 +364,25 @@ export default function NewAnalysisPage() {
         </Panel>
       )}
 
-      {analysis.isAnalyzing ? (
+      {analysis.isAnalyzing || finishing ? (
         <div className="mt-2">
           <ProcessingScreen
             title={upload.file?.name ?? "your match"}
             durationLabel={probe ? secondsToTimestamp(probe.durationSeconds) : ""}
             durationSeconds={probe?.durationSeconds ?? 0}
             percent={percent}
-            message={analysis.progress.message}
+            message={stageMessage}
             detail={analysis.detail}
+            clipProgress={
+              finishing
+                ? {
+                    cut: clipState.readyCount,
+                    stored: clipArchive.uploaded,
+                    total: totalClips,
+                  }
+                : null
+            }
+            onSkip={finishing ? () => setSkipWait(true) : undefined}
             onCancel={analysis.cancel}
           />
         </div>

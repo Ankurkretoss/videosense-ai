@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  updateDoc,
   deleteDoc,
   doc,
   getDoc,
@@ -45,8 +46,42 @@ export interface StoredAnalysisSummary {
   trimmed: string[];
 }
 
+export interface StoredClipRef {
+  key: string;
+  size: number;
+}
+
+export interface StoredSourceRef {
+  key: string;
+  size: number;
+  name: string;
+}
+
 export interface StoredAnalysis extends StoredAnalysisSummary {
   analysis: SportsAnalysis;
+  /** Highlight id → clip stored in object storage. */
+  clips: Record<string, StoredClipRef>;
+  /** The original uploaded video, once it has finished archiving. */
+  sourceVideo: StoredSourceRef | null;
+}
+
+/** Records clips that the browser uploaded to object storage. */
+export async function attachStoredClips(
+  id: string,
+  clips: Record<string, StoredClipRef>
+): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  for (const [clipId, ref] of Object.entries(clips)) {
+    patch[`clips.${clipId}`] = ref;
+  }
+  if (Object.keys(patch).length === 0) return;
+
+  await updateDoc(doc(getDb(), COLLECTION, id), patch);
+}
+
+/** Records the original video once the browser has finished uploading it. */
+export async function attachStoredSource(id: string, source: StoredSourceRef): Promise<void> {
+  await updateDoc(doc(getDb(), COLLECTION, id), { sourceVideo: source });
 }
 
 function eventCountOf(analysis: SportsAnalysis): number {
@@ -228,8 +263,10 @@ export async function getStoredAnalysis(id: string): Promise<StoredAnalysis | nu
 
     const data = snapshot.data();
     const analysis = JSON.parse(String(data.analysisJson ?? "{}")) as SportsAnalysis;
+    const clips = (data.clips ?? {}) as Record<string, StoredClipRef>;
+    const sourceVideo = (data.sourceVideo ?? null) as StoredSourceRef | null;
 
-    return { ...toSummary(snapshot.id, data), analysis };
+    return { ...toSummary(snapshot.id, data), analysis, clips, sourceVideo };
   } catch (cause) {
     throw describeFirestoreError(cause);
   }

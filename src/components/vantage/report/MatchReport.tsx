@@ -29,6 +29,11 @@ interface MatchReportProps {
   /** Shown under the header — save status, saved-report meta, and so on. */
   note?: ReactNode;
   savedAt?: number;
+  /** Highlight id → object key for clips already in cloud storage. */
+  storedClips?: Record<string, string>;
+  /** Object key for the original video, once archived in cloud storage. */
+  storedVideoKey?: string | null;
+  uploadNote?: string | null;
   /** Opens the report on a specific tab (used for deep links). */
   initialTab?: string;
 }
@@ -41,6 +46,9 @@ export function MatchReport({
   clipState,
   note,
   savedAt,
+  storedClips,
+  storedVideoKey,
+  uploadNote,
   initialTab,
 }: MatchReportProps) {
   const [tab, setTab] = useState<Tab>(
@@ -57,7 +65,11 @@ export function MatchReport({
   const clips = clipState ?? ownClipState;
 
   const youtubeId = youtubeUrl ? youtubeVideoId(youtubeUrl) : null;
-  const fileSrc = sourceFile ? filePreview : null;
+  // Prefer the local file (fastest, works offline); fall back to the archived
+  // copy in cloud storage so saved reports still play once the file is gone.
+  const fileSrc =
+    (sourceFile ? filePreview : null) ??
+    (storedVideoKey ? `/api/clips/play?key=${encodeURIComponent(storedVideoKey)}` : null);
   const canSeek = Boolean(fileSrc || youtubeId);
 
   const handleSeek = useCallback(
@@ -198,6 +210,8 @@ export function MatchReport({
           clipState={clips}
           hasSourceFile={Boolean(sourceFile)}
           youtubeId={youtubeId}
+          storedClips={storedClips}
+          uploadNote={uploadNote}
           onSeek={seek}
         />
       )}
