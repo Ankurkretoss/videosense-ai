@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, Film, Link2, Loader2, Plus, Upload } from "lucide-react";
+import { AlertCircle, Clock, Film, Link2, Loader2, Plus, Upload } from "lucide-react";
 import { Chip, Kpi, Panel, PrimaryLink, StatusPill } from "@/components/vantage/ui";
 import { listAnalyses, type StoredAnalysisSummary } from "@/lib/analysis-store";
 import { isFirebaseConfigured } from "@/lib/firebase";
@@ -224,12 +224,28 @@ export function MatchCard({ entry }: { entry: StoredAnalysisSummary }) {
             </div>
           ))}
         </div>
-        <Link
-          href={`/dashboard/matches/${entry.id}`}
-          className="mt-3.5 block rounded-[9px] border border-brand/35 bg-brand/[0.12] py-2.5 text-center text-[13px] font-bold text-brand-soft transition-colors hover:bg-brand/20"
-        >
-          View analysis
-        </Link>
+        <div className="mt-3.5 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-mute-3">
+            <Clock className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              Uploaded{" "}
+              {new Date(entry.createdAt).toLocaleString("en-GB", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: true,
+              })}
+            </span>
+          </div>
+          <Link
+            href={`/dashboard/matches/${entry.id}`}
+            className="shrink-0 rounded-[8px] border border-brand/35 bg-brand/[0.12] px-3 py-1.5 text-[12px] font-bold text-brand-soft transition-colors hover:bg-brand/20"
+          >
+            View analysis
+          </Link>
+        </div>
       </div>
     </Panel>
   );
