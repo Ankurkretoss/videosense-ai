@@ -145,7 +145,7 @@ export function ProcessingScreen({
             <div
               className={cn(
                 "text-[14px] font-bold",
-                /busy|retry|retrying/i.test(message) ? "text-warn" : "text-ink-100"
+                /busy|retry|retrying|high demand/i.test(message) ? "text-warn" : "text-ink-100"
               )}
             >
               {message || "Working through the footage…"}

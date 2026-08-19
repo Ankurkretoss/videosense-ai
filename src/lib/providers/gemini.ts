@@ -26,6 +26,18 @@ interface PassResult {
 /** Retry pacing for a busy model: 3s, 8s, 15s, 25s, 40s. */
 const RETRY_DELAYS_MS = [3000, 8000, 15000, 25000, 40000];
 
+/**
+ * One fixed line for "the model is overloaded" — shown the same way whether we are
+ * mid-retry or have given up after every attempt, so a coach only ever sees this one
+ * sentence for this situation instead of a different message each time.
+ */
+const HIGH_DEMAND_MESSAGE =
+  "Our AI service is currently facing very high demand and couldn't process your request. Please wait a few minutes and try again.";
+
+function isHighDemand(status: number, body: string): boolean {
+  return status === 503 || /UNAVAILABLE|high demand|overloaded/i.test(body);
+}
+
 /** A single pass should never hang the whole analysis. */
 const PASS_TIMEOUT_MS = 8 * 60 * 1000;
 
@@ -41,8 +53,8 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
  * failure is translated into something actionable before it reaches the UI.
  */
 function describeApiFailure(status: number, body: string): string {
-  if (status === 503 || /UNAVAILABLE|high demand|overloaded/i.test(body)) {
-    return "The AI service is busy right now and could not take this analysis. It is a temporary capacity problem on their side — try again in a few minutes.";
+  if (isHighDemand(status, body)) {
+    return HIGH_DEMAND_MESSAGE;
   }
   if (status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(body)) {
     return "The AI request limit for this API key has been reached. Wait a few minutes, or use a key with more quota.";
@@ -304,10 +316,15 @@ Provide a comprehensive video analysis. Return ONLY valid JSON (no markdown, no 
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
         const waitMs = RETRY_DELAYS_MS[attempt - 1];
+        // A busy/overloaded model always shows the one fixed line, mid-retry or not;
+        // other retryable causes (a dropped connection, an empty response) keep their
+        // own more specific wording.
         onRetry?.(
-          `The AI service is busy — retrying in ${Math.round(waitMs / 1000)}s (attempt ${
-            attempt + 1
-          } of ${attempts})...`
+          isHighDemand(lastStatus, lastError)
+            ? HIGH_DEMAND_MESSAGE
+            : `The AI service is busy — retrying in ${Math.round(waitMs / 1000)}s (attempt ${
+                attempt + 1
+              } of ${attempts})...`
         );
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
