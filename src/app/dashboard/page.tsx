@@ -164,6 +164,17 @@ export default function DashboardHome() {
   );
 }
 
+function formatUploadedAt(timestamp: number): string {
+  const date = new Date(timestamp);
+  const datePart = date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const timePart = date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${datePart} ${timePart}`;
+}
+
 export function MatchCard({ entry }: { entry: StoredAnalysisSummary }) {
   const stats = [
     { k: "Events", v: entry.eventCount },
@@ -227,17 +238,7 @@ export function MatchCard({ entry }: { entry: StoredAnalysisSummary }) {
         <div className="mt-3.5 flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-mute-3">
             <Clock className="h-3 w-3 shrink-0" />
-            <span className="truncate">
-              Uploaded{" "}
-              {new Date(entry.createdAt).toLocaleString("en-GB", {
-                day: "numeric",
-                month: "short",
-                year: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: true,
-              })}
-            </span>
+            <span className="truncate">{formatUploadedAt(entry.createdAt)}</span>
           </div>
           <Link
             href={`/dashboard/matches/${entry.id}`}
